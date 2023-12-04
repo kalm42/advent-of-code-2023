@@ -32,30 +32,42 @@ where
 }
 
 fn part_one(line: &Result<String, Error>) -> i32 {
-    let mut freqs: Vec<i32> = Vec::new();
-    if let Ok(freq_jumble) = line {
-        for c in freq_jumble.chars() {
-            if let Ok(num) = c.to_string().parse::<i32>() {
-                freqs.push(num);
-            }
-        }
-    }
+    let freqs: Vec<i32> = line
+        .as_ref()
+        .ok()
+        .map(|freq_jumble| {
+            freq_jumble
+                .chars()
+                .filter_map(|c| c.to_digit(10).map(|d| d as i32))
+                .collect()
+        })
+        .unwrap_or_else(Vec::new);
 
     return match freqs.len() {
         0 => 0,
-        1 => format!("{0}{0}", freqs[0]).parse::<i32>().unwrap(),
-        2 => format!("{}{}", freqs[0], freqs[1]).parse::<i32>().unwrap(),
+        1 => format!("{0}{0}", freqs[0]).parse::<i32>().unwrap_or(0),
         _ => format!("{}{}", freqs[0], freqs[freqs.len() - 1])
             .parse::<i32>()
-            .unwrap(),
+            .unwrap_or(0),
     };
 }
 
+use std::collections::HashMap;
+
 fn part_two(line: &Result<String, Error>) -> i32 {
     let mut word_freqs = Vec::new();
-    let alpha_numbers = vec![
-        "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
-    ];
+    let alpha_numbers: HashMap<&str, i32> = [
+        ("one", 1),
+        ("two", 2),
+        ("three", 3),
+        ("four", 4),
+        ("five", 5),
+        ("six", 6),
+        ("seven", 7),
+        ("eight", 8),
+        ("nine", 9),
+    ]
+    .into();
     let mut pointer = 0;
 
     if let Ok(freq_jumble) = line {
@@ -63,24 +75,14 @@ fn part_two(line: &Result<String, Error>) -> i32 {
             let substr = &freq_jumble[pointer..];
 
             // is the first character a number?
-            if let Ok(num) = substr.chars().next().unwrap().to_string().parse::<i32>() {
-                word_freqs.push(num);
+            if let Some(num) = substr.chars().next().unwrap().to_digit(10) {
+                word_freqs.push(num as i32);
             } else {
                 // if not is this a word?
-                for word in &alpha_numbers {
+                for (word, &num) in alpha_numbers.iter() {
                     if substr.starts_with(word) {
-                        match word {
-                            &"one" => word_freqs.push(1),
-                            &"two" => word_freqs.push(2),
-                            &"three" => word_freqs.push(3),
-                            &"four" => word_freqs.push(4),
-                            &"five" => word_freqs.push(5),
-                            &"six" => word_freqs.push(6),
-                            &"seven" => word_freqs.push(7),
-                            &"eight" => word_freqs.push(8),
-                            &"nine" => word_freqs.push(9),
-                            _ => {}
-                        }
+                        word_freqs.push(num);
+                        break;
                     }
                 }
             }
@@ -88,14 +90,14 @@ fn part_two(line: &Result<String, Error>) -> i32 {
         }
     }
 
-    return match word_freqs.len() {
+    match word_freqs.len() {
         0 => 0,
-        1 => format!("{0}{0}", word_freqs[0]).parse::<i32>().unwrap(),
+        1 => format!("{0}{0}", word_freqs[0]).parse::<i32>().unwrap_or(0),
         2 => format!("{}{}", word_freqs[0], word_freqs[1])
             .parse::<i32>()
-            .unwrap(),
+            .unwrap_or(0),
         _ => format!("{}{}", word_freqs[0], word_freqs[word_freqs.len() - 1])
             .parse::<i32>()
-            .unwrap(),
-    };
+            .unwrap_or(0),
+    }
 }
