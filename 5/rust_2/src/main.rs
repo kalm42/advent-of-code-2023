@@ -9,7 +9,7 @@ use std::time::Instant;
 fn main() {
     let start = Instant::now();
 
-    let lines = match read_lines("./input_sample.txt") {
+    let lines = match read_lines("./input.txt") {
         Ok(l) => l,
         Err(e) => panic!("Error: {}", e),
     };
@@ -55,21 +55,24 @@ fn main() {
             seed_ranges.push(Range::new(*seed_start, seed_end));
         }
     }
-    println!("Seed ranges: {:?}", seed_ranges);
+    // println!("Seed ranges: {:?}", seed_ranges);
 
-    let mut omega_closest_location: i64 = std::i64::MAX;
+    let mut omega_closest_location: Vec<Range> = Vec::new();
     for seed_range in seed_ranges.iter() {
         let new_location = match get_location_for_seed_range(seed_range.clone(), &ranges) {
             Some(l) => l,
             None => vec![Range::new(std::i64::MAX, std::i64::MAX)],
         };
-        for location in new_location {
-            if location.start < omega_closest_location {
-                omega_closest_location = location.start;
-            }
-        }
+        omega_closest_location.extend(new_location);
     }
-    // println!("Omega closest location: {}", omega_closest_location);
+
+    println!("Omega closest location: {:?}", omega_closest_location);
+
+    let omega_closest_location = omega_closest_location
+        .iter()
+        .map(|r| r.start)
+        .min()
+        .unwrap();
 
     let duration = start.elapsed();
     println!("Part 1 Closest location is: {}", closest_location);
@@ -122,6 +125,10 @@ impl Range {
 
     fn len(&self) -> i64 {
         return self.end - self.start + 1;
+    }
+
+    fn intersects(&self, range: &Range) -> bool {
+        return self.contains(range.start) || self.contains(range.end);
     }
 
     // fn union(&self, range: &Range) -> Result<Range, String> {
@@ -308,118 +315,66 @@ fn get_next_marker_ranges(
     map: &Vec<(Range, Range)>,
     key_ranges: &Vec<Range>,
 ) -> Option<Vec<Range>> {
-    let mut accepted_source_ranges: Vec<Range> = Vec::new();
-    let mut accepted_destination_ranges: Vec<Range> = Vec::new();
+    // get the intersecting ranges
+    let mut intersecting_ranges: Vec<Range> = Vec::new();
+    let mut non_intersecting_ranges: Vec<Range> = Vec::new();
+    let diff_ranges: Vec<Range> = Vec::new();
 
-    // Loop over the key ranges to see if they are in a map
+    println!("-----------------------------------------------------------");
+    println!("Key ranges: {:?}", key_ranges);
+    // println!("Map: {:?}", map);
     for key_range in key_ranges.iter() {
-        let mut key = key_range.clone();
+        let mut key_remaining_range = vec![key_range.clone()];
         for (source_range, destination_range) in map.iter() {
-            // How do we move from the source to the destination?
-            let move_distance = destination_range.start - source_range.start;
-
-            // Check to see if any of the key_range intersects with the source_range
-            if source_range.contains_range(key.clone()) {
-                // println!("Source range contains key range.");
-
-                // Get the new range
-                let new_start = key.start + move_distance;
-                let new_end = key.end + move_distance;
-                let new_range = Range::new(new_start, new_end);
-
-                // println!("New range: start: {}, end: {}", new_start, new_end);
-                accepted_destination_ranges.push(new_range);
-
-                // Update the accepted source ranges
-                accepted_source_ranges.push(key.clone());
-            } else if source_range.contains(key.start) || source_range.contains(key.end) {
-                // println!("Source range intersects with key range.");
-                // start is not in range, end is
-                if let Ok(intersecting_range) = source_range.intersection(&key) {
-                    accepted_source_ranges.push(intersecting_range.clone());
-
-                    let new_start = intersecting_range.start + move_distance;
-                    let new_end = intersecting_range.end + move_distance;
-                    let new_range = Range::new(new_start, new_end);
-                    // println!("New range: start: {}, end: {}", new_start, new_end);
-                    accepted_destination_ranges.push(new_range);
-
-                    // Update the key range to exclude
-                    if let Ok(diff) = key.difference(&intersecting_range) {
-                        // println!("Difference: {:?}", diff);
-                        if diff.len() == 1 {
-                            key = diff[0].clone();
+            let mut new_key_remaining_range: Vec<Range> = Vec::new();
+            println!("Range collection length: {}", key_remaining_range.len());
+            for range in key_remaining_range {
+                println!("         BUILDING");
+                println!("Key: {:?}", range);
+                println!("Source: {:?}", source_range);
+                println!("Destination: {:?}", destination_range);
+                if source_range.intersects(&range) {
+                    // println!("Intersecting: k:{:?} s:{:?}", range, source_range);
+                    if let Ok(intersecting_range) = source_range.intersection(&range) {
+                        let move_distance = destination_range.start - source_range.start;
+                        let new_start = intersecting_range.start + move_distance;
+                        let new_end = intersecting_range.end + move_distance;
+                        let intersecting_range = Range::new(new_start, new_end);
+                        println!("Intersecting range: {:?}", intersecting_range);
+                        intersecting_ranges.push(intersecting_range);
+                    }
+                    if !source_range.contains_range(range.clone()) {
+                        if let Ok(diff) = range.difference(source_range) {
+                            println!("Diffed, adding to remaining: {:?}", diff);
+                            new_key_remaining_range.extend(diff);
                         }
                     }
+                } else {
+                    println!("Non intersecting: k:{:?} s:{:?}", range, source_range);
+                    new_key_remaining_range.push(range);
                 }
             }
-        }
-    }
-
-    // All key_ranges have been checked to see if they map to a different
-    // destination_range. We now need to see what if any accepted_source_ranges
-    // are not in the key_range.
-    if accepted_source_ranges.len() == 0 {
-        return None;
-    }
-
-    // Now we need to see if any of the key_ranges are not in the accepted_source_ranges
-    let mut ranges_to_carry_on: Vec<Range> = Vec::new();
-    let mut uncovered_ranges: Vec<Range> = Vec::new();
-    uncovered_ranges.append(&mut key_ranges.clone());
-
-    while uncovered_ranges.iter().map(|r| r.len()).sum::<i64>() != 1 {
-        let mut remaining_range: Vec<Range> = Vec::new();
-        for accepted_range in &accepted_source_ranges {
-            for r_range in uncovered_ranges.iter() {
-                if r_range.contains_range(accepted_range.clone()) {
-                    if let Ok(diff) = r_range.difference(accepted_range) {
-                        if !diff.is_empty() {
-                            remaining_range.append(&mut diff.clone());
-                        } else {
-                            remaining_range = vec![Range::new(0, 0)]; // empty range
-                            break;
-                        }
-                    }
-                }
+            if new_key_remaining_range.len() == 0 {
+                break;
             }
+            key_remaining_range = new_key_remaining_range;
         }
-        println!("Remaining range: {:?}", remaining_range);
-        uncovered_ranges = remaining_range;
+        non_intersecting_ranges.extend(key_remaining_range);
     }
 
-    for key_range in key_ranges.iter() {
-        let mut remaining_range = vec![key_range.clone()];
-        for accepted_range in &accepted_source_ranges {
-            for r_range in remaining_range.iter() {
-                if r_range.contains_range(accepted_range.clone()) {
-                    // println!("Removing: {:?}", accepted_range);
-                    if let Ok(diff) = r_range.difference(accepted_range) {
-                        if !diff.is_empty() {
-                        } else {
-                            remaining_range = vec![Range::new(0, 0)]; // empty range
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        for r_range in remaining_range.iter() {
-            if r_range.len() > 0 {
-                uncovered_ranges.push(r_range.clone());
-            }
-        }
-    }
-    accepted_destination_ranges.append(&mut uncovered_ranges);
+    // Sum of the intersecting ranges and the diff ranges should be the same as the key_ranges
+    let keys_length = key_ranges.iter().map(|r| r.len()).sum::<i64>();
+    let mut dest_length = intersecting_ranges.iter().map(|r| r.len()).sum::<i64>();
+    dest_length += non_intersecting_ranges.iter().map(|r| r.len()).sum::<i64>();
+    dest_length += diff_ranges.iter().map(|r| r.len()).sum::<i64>();
 
-    let mut keys_length: i64 = 0;
-    let mut dest_length: i64 = 0;
-    for key_range in key_ranges.iter() {
-        keys_length += key_range.len();
-    }
-    for dest_range in accepted_destination_ranges.iter() {
-        dest_length += dest_range.len();
-    }
+    println!("        RESULTS");
+    println!("Keys: {:?}", key_ranges);
+    println!("Intersecting: {:?}", intersecting_ranges);
+    println!("Non intersecting: {:?}", non_intersecting_ranges);
+    println!("Diff: {:?}", diff_ranges);
+    println!("Keys length: {}", keys_length);
+    println!("Dest length: {}", dest_length);
 
     if keys_length != dest_length {
         panic!(
@@ -429,6 +384,16 @@ fn get_next_marker_ranges(
             keys_length - dest_length
         );
     }
+
+    let mut accepted_destination_ranges: Vec<Range> = Vec::new();
+    accepted_destination_ranges.extend(intersecting_ranges);
+    accepted_destination_ranges.extend(non_intersecting_ranges);
+    accepted_destination_ranges.extend(diff_ranges);
+
+    println!(
+        "Accepted destination ranges: {:?}",
+        accepted_destination_ranges
+    );
 
     return Some(accepted_destination_ranges);
 }
@@ -510,48 +475,49 @@ fn get_location_for_seed_range(
     ) = ranges;
 
     let start = vec![seed_range.clone()];
+    println!("Getting soil");
     let soil: Vec<Range> = match get_next_marker_ranges(&seed_to_soil, &start) {
         Some(s) => s,
         None => vec![seed_range], // if there the number is the same
     };
-    // println!("Soil: {:?}", soil);
 
+    println!("Getting fertilizer");
     let fertilizer: Vec<Range> = match get_next_marker_ranges(&soil_to_fertilizer, &soil) {
         Some(f) => f,
         None => soil, // if there the number is the same
     };
-    // println!("Fertilizer: {:?}", fertilizer);
 
+    println!("Getting water");
     let water: Vec<Range> = match get_next_marker_ranges(&fertilizer_to_water, &fertilizer) {
         Some(w) => w,
         None => fertilizer, // if there the number is the same
     };
-    // println!("Water: {:?}", water);
 
+    println!("Getting light");
     let light: Vec<Range> = match get_next_marker_ranges(&water_to_light, &water) {
         Some(l) => l,
         None => water, // if there the number is the same
     };
-    // println!("Light: {:?}", light);
 
+    println!("Getting temperature");
     let temperature: Vec<Range> = match get_next_marker_ranges(&light_to_temperature, &light) {
         Some(t) => t,
         None => light, // if there the number is the same
     };
-    // println!("Temperature: {:?}", temperature);
 
+    println!("Getting humidity");
     let humidity: Vec<Range> = match get_next_marker_ranges(&temperature_to_humidity, &temperature)
     {
         Some(h) => h,
         None => temperature, // if there the number is the same
     };
-    // println!("Humidity: {:?}", humidity);
 
+    println!("Getting location");
     let location: Vec<Range> = match get_next_marker_ranges(&humidity_to_location, &humidity) {
         Some(l) => l,
         None => humidity, // if there the number is the same
     };
-    // println!("Location: {:?}", location);
+    println!("Location: {:?}", location);
 
     return Some(location);
 }
