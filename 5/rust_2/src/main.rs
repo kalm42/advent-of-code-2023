@@ -5,6 +5,9 @@ use std::path::Path;
 use std::time::Instant;
 
 // 114137738 too high
+// 84206669
+// 1245951 too low
+// 0 is too low
 
 fn main() {
     let start = Instant::now();
@@ -16,67 +19,18 @@ fn main() {
 
     let lines: Vec<_> = lines.collect();
 
-    // Line 1 is our seeds
-    let seeds = get_seeds(&lines);
-    // println!("Seeds: {:?}", seeds);
-
-    // Ok... new strategy.We're going to check if a seed is in a map range. It it is, find the mapped location, rather rinse and repeat.
-    let ranges = get_map_ranges(&lines);
-
-    let mut location: Option<i64> = None;
-
-    for seed in seeds.iter() {
-        let new_location = match get_location_for_seed(*seed, &ranges) {
-            Some(l) => l,
-            None => panic!("No location found for seed: {}", seed),
-        };
-        match location {
-            Some(l) => {
-                if new_location < l {
-                    location = Some(new_location);
-                }
-            }
-            None => {
-                location = Some(new_location);
-            }
-        }
-    }
-
-    let closest_location = match location {
-        Some(l) => l,
-        None => panic!("No location found for seeds: {:?}", seeds),
-    };
-
     // Part 2
-    let mut seed_ranges: Vec<Range> = Vec::new();
-    for seed_chunk in seeds.chunks(2) {
-        if let [seed_start, distance] = seed_chunk {
-            let seed_end = seed_start + distance - 1;
-            seed_ranges.push(Range::new(*seed_start, seed_end));
-        }
+    let (seed_ranges, maps) = parse_almanac(&lines);
+
+    // bucket
+    let mut closest_location: i64 = std::i64::MAX;
+
+    for seed_range in seed_ranges {
+        closest_location = min(closest_location, find_lowest_location(seed_range, &maps));
     }
-    // println!("Seed ranges: {:?}", seed_ranges);
-
-    let mut omega_closest_location: Vec<Range> = Vec::new();
-    for seed_range in seed_ranges.iter() {
-        let new_location = match get_location_for_seed_range(seed_range.clone(), &ranges) {
-            Some(l) => l,
-            None => vec![Range::new(std::i64::MAX, std::i64::MAX)],
-        };
-        omega_closest_location.extend(new_location);
-    }
-
-    println!("Omega closest location: {:?}", omega_closest_location);
-
-    let omega_closest_location = omega_closest_location
-        .iter()
-        .map(|r| r.start)
-        .min()
-        .unwrap();
 
     let duration = start.elapsed();
-    println!("Part 1 Closest location is: {}", closest_location);
-    println!("Part 2 Closest location is: {}", omega_closest_location);
+    println!("Part 2 Closest location is: {}", closest_location);
     println!("Time elapsed is: {:?}", duration);
 }
 
@@ -119,16 +73,19 @@ impl Range {
         return value >= self.start && value <= self.end;
     }
 
-    fn contains_range(&self, range: Range) -> bool {
-        return self.contains(range.start) && self.contains(range.end);
-    }
+    // fn contains_range(&self, range: Range) -> bool {
+    //     return self.contains(range.start) && self.contains(range.end);
+    // }
 
     fn len(&self) -> i64 {
         return self.end - self.start + 1;
     }
 
     fn intersects(&self, range: &Range) -> bool {
-        return self.contains(range.start) || self.contains(range.end);
+        let r = self.contains(range.start)
+            || self.contains(range.end)
+            || (range.start <= self.start && range.end >= self.end);
+        return r;
     }
 
     // fn union(&self, range: &Range) -> Result<Range, String> {
@@ -170,354 +127,133 @@ impl PartialEq for Range {
     }
 }
 
-fn get_seeds(lines: &Vec<Result<String, Error>>) -> Vec<i64> {
-    return match lines[0].as_ref() {
-        Ok(s) => {
-            let not_parsed = s.split(":").collect::<Vec<&str>>();
-            let seeds = get_numbers_from_line(not_parsed[1].to_string());
-            seeds
-        }
+fn parse_almanac(lines: &Vec<Result<String, Error>>) -> (Vec<Range>, Vec<Vec<(Range, Range)>>) {
+    let seed_line: String = match lines[0].as_ref() {
+        Ok(s) => s.to_string(),
         Err(e) => panic!("Error: {}", e),
     };
+
+    let seed_ranges: Vec<Range> = extract_seed_ranges(&seed_line);
+    let maps: Vec<Vec<(Range, Range)>> = extract_maps(lines);
+
+    return (seed_ranges, maps);
 }
 
-fn get_map_ranges(
-    lines: &Vec<Result<String, Error>>,
-) -> (
-    Vec<(Range, Range)>,
-    Vec<(Range, Range)>,
-    Vec<(Range, Range)>,
-    Vec<(Range, Range)>,
-    Vec<(Range, Range)>,
-    Vec<(Range, Range)>,
-    Vec<(Range, Range)>,
-) {
-    enum Mapping {
-        SeedToSoil,
-        SoilToFertilizer,
-        FertilizerToWater,
-        WaterToLight,
-        LightToTemperature,
-        TemperatureToHumidity,
-        HumidityToLocation,
-    }
-    let mut mapping = Mapping::SeedToSoil;
-    let mut seed_to_soil: Vec<(Range, Range)> = Vec::new();
-    let mut soil_to_fertilizer: Vec<(Range, Range)> = Vec::new();
-    let mut fertilizer_to_water: Vec<(Range, Range)> = Vec::new();
-    let mut water_to_light: Vec<(Range, Range)> = Vec::new();
-    let mut light_to_temperature: Vec<(Range, Range)> = Vec::new();
-    let mut temperature_to_humidity: Vec<(Range, Range)> = Vec::new();
-    let mut humidity_to_location: Vec<(Range, Range)> = Vec::new();
+fn extract_seed_ranges(line: &String) -> Vec<Range> {
+    let mut seed_ranges: Vec<Range> = Vec::new();
 
-    for line in lines.iter().skip(1) {
-        match line.as_ref() {
-            Ok(l) => {
-                // a line is either blank, a title, or a mapping
-                let first_char = l.chars().nth(0);
-                match first_char {
-                    Some(c) => {
-                        if c.is_alphabetic() {
-                            // title
-                            match l.as_str() {
-                                "seed-to-soil map:" => mapping = Mapping::SeedToSoil,
-                                "soil-to-fertilizer map:" => mapping = Mapping::SoilToFertilizer,
-                                "fertilizer-to-water map:" => mapping = Mapping::FertilizerToWater,
-                                "water-to-light map:" => mapping = Mapping::WaterToLight,
-                                "light-to-temperature map:" => {
-                                    mapping = Mapping::LightToTemperature
-                                }
-                                "temperature-to-humidity map:" => {
-                                    mapping = Mapping::TemperatureToHumidity
-                                }
-                                "humidity-to-location map:" => {
-                                    mapping = Mapping::HumidityToLocation
-                                }
-                                _ => panic!("Unknown mapping: {}", l),
-                            }
-                        } else {
-                            match mapping {
-                                Mapping::SeedToSoil => {
-                                    update_range(&mut seed_to_soil, &l.to_string());
-                                }
-                                Mapping::SoilToFertilizer => {
-                                    update_range(&mut soil_to_fertilizer, &l.to_string());
-                                }
-                                Mapping::FertilizerToWater => {
-                                    update_range(&mut fertilizer_to_water, &l.to_string());
-                                }
-                                Mapping::WaterToLight => {
-                                    update_range(&mut water_to_light, &l.to_string());
-                                }
-                                Mapping::LightToTemperature => {
-                                    update_range(&mut light_to_temperature, &l.to_string());
-                                }
-                                Mapping::TemperatureToHumidity => {
-                                    update_range(&mut temperature_to_humidity, &l.to_string());
-                                }
-                                Mapping::HumidityToLocation => {
-                                    update_range(&mut humidity_to_location, &l.to_string());
-                                }
-                            }
-                        }
-                    }
-                    None => {
-                        // blank line, fine, NEXT!
-                    }
-                }
-            }
+    // Line is in the format "seeds: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15"
+    let not_parsed = line.split(":").collect::<Vec<&str>>();
+    let seeds = get_numbers_from_line(not_parsed[1].to_string());
+
+    // Seeds are in pairs, so we need to chunk them
+    for seed_chunk in seeds.chunks(2) {
+        if let [seed_start, distance] = seed_chunk {
+            let seed_end = seed_start + distance - 1;
+            seed_ranges.push(Range::new(*seed_start, seed_end));
+        }
+    }
+
+    return seed_ranges;
+}
+
+fn extract_maps(lines: &Vec<Result<String, Error>>) -> Vec<Vec<(Range, Range)>> {
+    let mut maps: Vec<Vec<(Range, Range)>> = Vec::new();
+    let mut current_map: Vec<(Range, Range)> = Vec::new();
+
+    for line in lines.iter().skip(2) {
+        let line: String = match line.as_ref() {
+            Ok(s) => s.to_string(),
             Err(e) => panic!("Error: {}", e),
-        }
-    }
-
-    return (
-        seed_to_soil,
-        soil_to_fertilizer,
-        fertilizer_to_water,
-        water_to_light,
-        light_to_temperature,
-        temperature_to_humidity,
-        humidity_to_location,
-    );
-}
-
-fn update_range(map: &mut Vec<(Range, Range)>, line: &String) {
-    let values = get_numbers_from_line(line.to_string());
-    if values.len() != 3 {
-        panic!("Invalid line: {}, got {:?}", line, values);
-    }
-    let destination_start = values[0];
-    let source_start = values[1];
-    let distance = values[2];
-    let source_end = source_start + distance - 1;
-    let destination_end = destination_start + distance - 1;
-
-    let destination = Range::new(destination_start, destination_end);
-    let source = Range::new(source_start, source_end);
-
-    map.push((source, destination));
-}
-
-fn get_next_marker(map: &Vec<(Range, Range)>, key: i64) -> Option<i64> {
-    let mut marker: Option<i64> = None;
-    for (source, destination) in map.iter() {
-        if source.contains(key) {
-            // To figure out next fig is x - source_start + destination_start
-            marker = Some(key - source.start + destination.start);
-            break;
-        }
-    }
-
-    return marker;
-}
-
-fn get_next_marker_ranges(
-    map: &Vec<(Range, Range)>,
-    key_ranges: &Vec<Range>,
-) -> Option<Vec<Range>> {
-    // get the intersecting ranges
-    let mut intersecting_ranges: Vec<Range> = Vec::new();
-    let mut non_intersecting_ranges: Vec<Range> = Vec::new();
-    let diff_ranges: Vec<Range> = Vec::new();
-
-    println!("-----------------------------------------------------------");
-    println!("Key ranges: {:?}", key_ranges);
-    // println!("Map: {:?}", map);
-    for key_range in key_ranges.iter() {
-        let mut key_remaining_range = vec![key_range.clone()];
-        for (source_range, destination_range) in map.iter() {
-            let mut new_key_remaining_range: Vec<Range> = Vec::new();
-            println!("Range collection length: {}", key_remaining_range.len());
-            for range in key_remaining_range {
-                println!("         BUILDING");
-                println!("Key: {:?}", range);
-                println!("Source: {:?}", source_range);
-                println!("Destination: {:?}", destination_range);
-                if source_range.intersects(&range) {
-                    // println!("Intersecting: k:{:?} s:{:?}", range, source_range);
-                    if let Ok(intersecting_range) = source_range.intersection(&range) {
-                        let move_distance = destination_range.start - source_range.start;
-                        let new_start = intersecting_range.start + move_distance;
-                        let new_end = intersecting_range.end + move_distance;
-                        let intersecting_range = Range::new(new_start, new_end);
-                        println!("Intersecting range: {:?}", intersecting_range);
-                        intersecting_ranges.push(intersecting_range);
-                    }
-                    if !source_range.contains_range(range.clone()) {
-                        if let Ok(diff) = range.difference(source_range) {
-                            println!("Diffed, adding to remaining: {:?}", diff);
-                            new_key_remaining_range.extend(diff);
-                        }
-                    }
-                } else {
-                    println!("Non intersecting: k:{:?} s:{:?}", range, source_range);
-                    new_key_remaining_range.push(range);
-                }
+        };
+        if line.is_empty() && current_map.len() > 1 {
+            maps.push(current_map);
+            current_map = Vec::new();
+        } else if line.starts_with(char::is_alphabetic) {
+            // This is a map name
+            continue;
+        } else {
+            // This is a map
+            let numbers: Vec<_> = line
+                .split_whitespace()
+                .filter_map(|s| s.parse().ok())
+                .collect();
+            if let [destination_start, source_start, distance] = numbers.as_slice() {
+                let destination_end = destination_start + distance - 1;
+                let source_end = source_start + distance - 1;
+                current_map.push((
+                    Range::new(*source_start, source_end),
+                    Range::new(*destination_start, destination_end),
+                ));
             }
-            if new_key_remaining_range.len() == 0 {
-                break;
-            }
-            key_remaining_range = new_key_remaining_range;
         }
-        non_intersecting_ranges.extend(key_remaining_range);
     }
 
-    // Sum of the intersecting ranges and the diff ranges should be the same as the key_ranges
-    let keys_length = key_ranges.iter().map(|r| r.len()).sum::<i64>();
-    let mut dest_length = intersecting_ranges.iter().map(|r| r.len()).sum::<i64>();
-    dest_length += non_intersecting_ranges.iter().map(|r| r.len()).sum::<i64>();
-    dest_length += diff_ranges.iter().map(|r| r.len()).sum::<i64>();
-
-    println!("        RESULTS");
-    println!("Keys: {:?}", key_ranges);
-    println!("Intersecting: {:?}", intersecting_ranges);
-    println!("Non intersecting: {:?}", non_intersecting_ranges);
-    println!("Diff: {:?}", diff_ranges);
-    println!("Keys length: {}", keys_length);
-    println!("Dest length: {}", dest_length);
-
-    if keys_length != dest_length {
-        panic!(
-            "Key length: {}, dest length: {}, diff: {}",
-            keys_length,
-            dest_length,
-            keys_length - dest_length
-        );
+    if current_map.len() > 1 {
+        maps.push(current_map);
     }
 
-    let mut accepted_destination_ranges: Vec<Range> = Vec::new();
-    accepted_destination_ranges.extend(intersecting_ranges);
-    accepted_destination_ranges.extend(non_intersecting_ranges);
-    accepted_destination_ranges.extend(diff_ranges);
-
-    println!(
-        "Accepted destination ranges: {:?}",
-        accepted_destination_ranges
-    );
-
-    return Some(accepted_destination_ranges);
+    maps
 }
 
-fn get_location_for_seed(
-    seed: i64,
-    ranges: &(
-        Vec<(Range, Range)>,
-        Vec<(Range, Range)>,
-        Vec<(Range, Range)>,
-        Vec<(Range, Range)>,
-        Vec<(Range, Range)>,
-        Vec<(Range, Range)>,
-        Vec<(Range, Range)>,
-    ),
-) -> Option<i64> {
-    let (
-        seed_to_soil,
-        soil_to_fertilizer,
-        fertilizer_to_water,
-        water_to_light,
-        light_to_temperature,
-        temperature_to_humidity,
-        humidity_to_location,
-    ) = ranges;
+fn transform_range(a: &Range, map: &Vec<(Range, Range)>) -> Vec<Range> {
+    let mut transformed_ranges: Vec<Range> = Vec::new();
+    let mut maps = map.iter();
 
-    let soil = match get_next_marker(&seed_to_soil, seed) {
-        Some(s) => s,
-        None => seed, // if there the number is the same
-    };
-    let fertilizer = match get_next_marker(&soil_to_fertilizer, soil) {
-        Some(f) => f,
-        None => soil, // if there the number is the same
-    };
-    let water = match get_next_marker(&fertilizer_to_water, fertilizer) {
-        Some(w) => w,
-        None => fertilizer, // if there the number is the same
-    };
-    let light = match get_next_marker(&water_to_light, water) {
-        Some(l) => l,
-        None => water, // if there the number is the same
-    };
-    let temperature = match get_next_marker(&light_to_temperature, light) {
-        Some(t) => t,
-        None => light, // if there the number is the same
-    };
-    let humidity = match get_next_marker(&temperature_to_humidity, temperature) {
-        Some(h) => h,
-        None => temperature, // if there the number is the same
-    };
-    let location = match get_next_marker(&humidity_to_location, humidity) {
-        Some(l) => l,
-        None => humidity, // if there the number is the same
-    };
+    while let Some((source, destination)) = maps.next() {
+        let source = source.clone();
+        let destination = destination.clone();
 
-    return Some(location);
+        if source.intersects(a) {
+            let intersection = match source.intersection(a) {
+                Ok(r) => r,
+                Err(e) => panic!("Error: {}", e),
+            };
+            let difference = match a.difference(&source) {
+                Ok(r) => r,
+                Err(e) => panic!("Error: {}", e),
+            };
+
+            for new_a in difference {
+                let transformed = transform_range(&new_a, map);
+                transformed_ranges.extend(transformed);
+            }
+
+            let new_location = intersection.start + (destination.start - source.start);
+            let new_range = Range::new(new_location, new_location + intersection.len() - 1);
+            transformed_ranges.push(new_range);
+            return transformed_ranges;
+        }
+    }
+
+    if transformed_ranges.len() == 0 {
+        transformed_ranges.push(a.clone());
+    }
+
+    return transformed_ranges;
 }
 
-fn get_location_for_seed_range(
-    seed_range: Range,
-    ranges: &(
-        Vec<(Range, Range)>,
-        Vec<(Range, Range)>,
-        Vec<(Range, Range)>,
-        Vec<(Range, Range)>,
-        Vec<(Range, Range)>,
-        Vec<(Range, Range)>,
-        Vec<(Range, Range)>,
-    ),
-) -> Option<Vec<Range>> {
-    let (
-        seed_to_soil,
-        soil_to_fertilizer,
-        fertilizer_to_water,
-        water_to_light,
-        light_to_temperature,
-        temperature_to_humidity,
-        humidity_to_location,
-    ) = ranges;
+fn find_lowest_location(seed_range: Range, maps: &Vec<Vec<(Range, Range)>>) -> i64 {
+    let mut lowest_location: i64 = std::i64::MAX;
+    let mut current_ranges = vec![seed_range.clone()];
 
-    let start = vec![seed_range.clone()];
-    println!("Getting soil");
-    let soil: Vec<Range> = match get_next_marker_ranges(&seed_to_soil, &start) {
-        Some(s) => s,
-        None => vec![seed_range], // if there the number is the same
-    };
+    for map in maps {
+        let mut transformed_ranges: Vec<Range> = Vec::new();
+        for current_range in current_ranges {
+            let r = transform_range(&current_range, map);
+            transformed_ranges.extend(r);
+        }
+        current_ranges = transformed_ranges;
+    }
 
-    println!("Getting fertilizer");
-    let fertilizer: Vec<Range> = match get_next_marker_ranges(&soil_to_fertilizer, &soil) {
-        Some(f) => f,
-        None => soil, // if there the number is the same
-    };
+    for current_range in current_ranges {
+        if current_range.start < lowest_location {
+            lowest_location = current_range.start;
+        }
+        if current_range.end < lowest_location {
+            lowest_location = current_range.end;
+        }
+    }
 
-    println!("Getting water");
-    let water: Vec<Range> = match get_next_marker_ranges(&fertilizer_to_water, &fertilizer) {
-        Some(w) => w,
-        None => fertilizer, // if there the number is the same
-    };
-
-    println!("Getting light");
-    let light: Vec<Range> = match get_next_marker_ranges(&water_to_light, &water) {
-        Some(l) => l,
-        None => water, // if there the number is the same
-    };
-
-    println!("Getting temperature");
-    let temperature: Vec<Range> = match get_next_marker_ranges(&light_to_temperature, &light) {
-        Some(t) => t,
-        None => light, // if there the number is the same
-    };
-
-    println!("Getting humidity");
-    let humidity: Vec<Range> = match get_next_marker_ranges(&temperature_to_humidity, &temperature)
-    {
-        Some(h) => h,
-        None => temperature, // if there the number is the same
-    };
-
-    println!("Getting location");
-    let location: Vec<Range> = match get_next_marker_ranges(&humidity_to_location, &humidity) {
-        Some(l) => l,
-        None => humidity, // if there the number is the same
-    };
-    println!("Location: {:?}", location);
-
-    return Some(location);
+    return lowest_location;
 }
